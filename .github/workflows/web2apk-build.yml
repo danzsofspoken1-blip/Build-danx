@@ -1,0 +1,188 @@
+name: Web to APK Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Website URL'
+        required: true
+        type: string
+      app_name:
+        description: 'App Name'
+        required: true
+        type: string
+      icon_url:
+        description: 'Icon URL'
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    
+    steps:
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.16.0'
+          channel: 'stable'
+          
+      - name: Download icon
+        run: |
+          echo "🖼️ Downloading icon..."
+          curl -L "${{ github.event.inputs.icon_url }}" -o icon.png
+          file icon.png
+          
+      - name: Create Flutter WebView app
+        run: |
+          echo "📱 Creating WebView app: ${{ github.event.inputs.app_name }}"
+          
+          # Create flutter project
+          flutter create --platforms=android web_app
+          cd web_app
+          
+          # Add webview_flutter
+          flutter pub add webview_flutter
+          
+          # Create main.dart with WebView
+          cat > lib/main.dart << 'DART'
+          import 'package:flutter/material.dart';
+          import 'package:webview_flutter/webview_flutter.dart';
+          
+          void main() {
+            runApp(const MyApp());
+          }
+          
+          class MyApp extends StatelessWidget {
+            const MyApp({super.key});
+            
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                title: '${{ github.event.inputs.app_name }}',
+                debugShowCheckedModeBanner: false,
+                theme: ThemeData(
+                  primarySwatch: Colors.blue,
+                  useMaterial3: true,
+                ),
+                home: const WebViewScreen(),
+              );
+            }
+          }
+          
+          class WebViewScreen extends StatefulWidget {
+            const WebViewScreen({super.key});
+            
+            @override
+            State<WebViewScreen> createState() => _WebViewScreenState();
+          }
+          
+          class _WebViewScreenState extends State<WebViewScreen> {
+            late final WebViewController controller;
+            
+            @override
+            void initState() {
+              super.initState();
+              controller = WebViewController()
+                ..setJavaScriptMode(JavaScriptMode.unrestricted)
+                ..setBackgroundColor(const Color(0x00000000))
+                ..setNavigationDelegate(
+                  NavigationDelegate(
+                    onProgress: (int progress) {
+                      print('Loading: $progress%');
+                    },
+                    onPageStarted: (String url) {
+                      print('Page started: $url');
+                    },
+                    onPageFinished: (String url) {
+                      print('Page finished: $url');
+                    },
+                    onWebResourceError: (WebResourceError error) {
+                      print('Error: ${error.description}');
+                    },
+                  ),
+                )
+                ..loadRequest(Uri.parse('${{ github.event.inputs.url }}'));
+            }
+            
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(
+                  title: Text('${{ github.event.inputs.app_name }}'),
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
+                  centerTitle: true,
+                  elevation: 0,
+                ),
+                body: WebViewWidget(controller: controller),
+              );
+            }
+          }
+          DART
+          
+          echo "✅ WebView app created!"
+          
+      - name: Apply icon
+        run: |
+          cd web_app
+          # Copy icon ke android resources
+          mkdir -p android/app/src/main/res/mipmap-hdpi
+          mkdir -p android/app/src/main/res/mipmap-mdpi
+          mkdir -p android/app/src/main/res/mipmap-xhdpi
+          mkdir -p android/app/src/main/res/mipmap-xxhdpi
+          mkdir -p android/app/src/main/res/mipmap-xxxhdpi
+          
+          # Resize icon untuk berbagai density
+          convert ../icon.png -resize 72x72 android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+          convert ../icon.png -resize 48x48 android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+          convert ../icon.png -resize 96x96 android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          convert ../icon.png -resize 144x144 android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          convert ../icon.png -resize 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          
+          echo "✅ Icon applied!"
+          
+      - name: Flutter pub get
+        run: |
+          cd web_app
+          flutter pub get
+          
+      - name: Build APK
+        id: build_apk
+        run: |
+          cd web_app
+          echo "🔨 Building APK for ${{ github.event.inputs.app_name }}..."
+          flutter build apk --release
+          APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
+          echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
+          
+      - name: Check APK
+        run: |
+          cd web_app
+          if [ ! -f "${{ env.APK_PATH }}" ]; then
+            echo "❌ APK not found!"
+            ls -la build/app/outputs/flutter-apk/ || echo "No APK"
+            exit 1
+          fi
+          APK_SIZE=$(du -h "${{ env.APK_PATH }}" | cut -f1)
+          echo "✅ APK found! Size: $APK_SIZE"
+          
+      - name: Upload APK
+        uses: actions/upload-artifact@v3
+        with:
+          name: web-apk
+          path: web_app/build/app/outputs/flutter-apk/*.apk
+          
+      - name: Build info
+        if: success()
+        run: |
+          echo "✅ Build successful!"
+          echo "📱 App: ${{ github.event.inputs.app_name }}"
+          echo "🌐 URL: ${{ github.event.inputs.url }}"
+          
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: web-build-logs
+          path: web_app/build/
