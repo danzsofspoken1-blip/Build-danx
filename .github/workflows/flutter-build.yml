@@ -25,16 +25,34 @@ jobs:
     timeout-minutes: 30
     
     steps:
-      - uses: subosito/flutter-action@v4
+      # ─── FLUTTER ACTION → PAKE V2! ──────────────────────
+      - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.16.0'
           channel: 'stable'
           
       - name: Download project
         run: |
-          echo "📥 Downloading from ${{ github.event.inputs.release_url }}"
           curl -L "${{ github.event.inputs.release_url }}/download/project.zip" -o project.zip
-          unzip -q project.zip -d project
+          unzip project.zip -d project
+          
+      - name: Build APK
+        run: |
+          cd project
+          flutter pub get
+          if [ "${{ github.event.inputs.build_type }}" == "debug" ]; then
+            flutter build apk --debug
+          else
+            flutter build apk --release
+          fi
+          
+      # ─── UPLOAD ARTIFACT → PAKE V4! ─────────────────────
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-apk
+          path: project/build/app/outputs/flutter-apk/*.apk
+          retention-days: 7          unzip -q project.zip -d project
           ls -la project/
           
       - name: Validate project
